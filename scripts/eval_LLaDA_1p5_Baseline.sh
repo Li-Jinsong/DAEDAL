@@ -36,8 +36,7 @@ done
 
 
 TASKS=("humaneval" "mbpp")
-# LENGTHS=(32 64 128 256 512 1024 2048)
-LENGTHS=(64)
+LENGTHS=(32 64 128 256 512 1024 2048)
 for task in "${TASKS[@]}"; do
     for length in "${LENGTHS[@]}"; do
         echo "======================================================"
