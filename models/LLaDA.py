@@ -23,6 +23,7 @@ from dllm_eval.api.instance import Instance
 from dllm_eval.api.model import LM, TemplateLM
 from dllm_eval.api.registry import register_model
 from dllm_eval.models.utils import get_dtype, configure_pad_token
+from dllm_eval.models.modeling_llada import LLaDAModelLM
 
 
 eval_logger = logging.getLogger(__name__)
@@ -516,7 +517,7 @@ class LLaDA(TemplateLM):
                     offload_folder=offload_folder,
                 )
             )
-        self._model = self.AUTO_MODEL_CLASS.from_pretrained(
+        self._model = LLaDAModelLM.from_pretrained(
             pretrained,
             revision=revision,
             torch_dtype=model_dtype,

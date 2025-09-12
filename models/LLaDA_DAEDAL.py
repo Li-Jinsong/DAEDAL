@@ -22,6 +22,7 @@ from dllm_eval.api.instance import Instance
 from dllm_eval.api.model import LM, TemplateLM
 from dllm_eval.api.registry import register_model
 from dllm_eval.models.utils import get_dtype, configure_pad_token
+from dllm_eval.models.modeling_llada import LLaDAModelLM
 
 
 eval_logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ def generate(
         batch_eos_confidences = []
         for i in range(logits.shape[0]):
             eos_confs_for_avg = []
-            start_scan_pos = total_lengths[i] - 1
+            start_scan_pos = total_lengths[i].item() - 1
             end_scan_pos = prompt_length - 1
             for pos in range(start_scan_pos, end_scan_pos, -1):
                 if len(eos_confs_for_avg) >= eos_check_tokens:
@@ -79,7 +80,6 @@ def generate(
         batch_size = prompt.shape[0]
         device = prompt.device
         prompt_length = prompt.shape[1]
-        pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
         assert eos_token_id is not None
         gen_lengths = torch.full((batch_size,), initial_gen_length, dtype=torch.long, device=device)
         x = torch.full(
@@ -94,7 +94,9 @@ def generate(
             print("[Stage-1] Initial Length Adjustment")
         while True:
             total_lengths = prompt_length + gen_lengths
-            attention_mask_pre = (x != pad_token_id).long()
+            max_len_pre = x.shape[1]
+            arange_tensor_pre = torch.arange(max_len_pre, device=device).expand(batch_size, -1)
+            attention_mask_pre = (arange_tensor_pre < total_lengths.unsqueeze(1)).long()
             logits_pre = model(x, attention_mask=attention_mask_pre).logits
             batch_eos_confidences = _calculate_eos_confidence(logits_pre, total_lengths, prompt_length, eos_check_tokens)
             sequences_to_expand = (batch_eos_confidences < eos_confidence_threshold) & (gen_lengths < max_gen_length)
@@ -104,29 +106,34 @@ def generate(
                 break
             if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
                  print(f"Some sequences' EOS confidence ({[round(c.item(), 4) for c in batch_eos_confidences]}) < {eos_confidence_threshold}. Expand initial length.")
-            max_new_gen_len = gen_lengths.max().item()
-            if sequences_to_expand.any():
-                 max_new_gen_len = min(max_new_gen_len + expansion_factor, max_gen_length)
-            if max_new_gen_len <= gen_lengths.max().item():
+            max_new_gen_len = gen_lengths[sequences_to_expand].max().item()
+            new_gen_lengths = gen_lengths.clone()
+            new_gen_lengths[sequences_to_expand] = torch.clamp(gen_lengths[sequences_to_expand] + expansion_factor, max=max_gen_length)
+            if new_gen_lengths.max() <= gen_lengths.max():
                  if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
                     print(f"WARNING: Cannot expand initial length further (already at max length: {max_gen_length}).")
                  break
-            max_new_total_len = prompt_length + max_new_gen_len
-            new_x_tensor = torch.full((batch_size, max_new_total_len), pad_token_id, dtype=torch.long, device=device)
-            new_gen_lengths = torch.zeros_like(gen_lengths)
+            max_new_total_len = prompt_length + new_gen_lengths.max()
+            new_x_tensor = torch.full((batch_size, max_new_total_len), eos_token_id, dtype=torch.long, device=device)
             for i in range(batch_size):
-                original_gen_len = gen_lengths[i].item()
-                original_total_len = prompt_length + original_gen_len
+                original_total_len = prompt_length + gen_lengths[i].item()
                 new_x_tensor[i, :original_total_len] = x[i, :original_total_len]
                 if sequences_to_expand[i]:
-                    new_len_i = min(original_gen_len + expansion_factor, max_gen_length)
-                    new_x_tensor[i, original_total_len : prompt_length + new_len_i] = mask_id
-                    new_gen_lengths[i] = new_len_i
-                else:
-                    new_gen_lengths[i] = original_gen_len
+                    new_total_len_i = prompt_length + new_gen_lengths[i].item()
+                    new_x_tensor[i, original_total_len : new_total_len_i] = mask_id
             x = new_x_tensor
             gen_lengths = new_gen_lengths
-
+        new_gen_lengths_with_eos = gen_lengths + int(eos_check_tokens/2)
+        new_gen_lengths_with_eos = torch.clamp(new_gen_lengths_with_eos, max=max_gen_length)
+        max_new_total_len = prompt_length + new_gen_lengths_with_eos.max()
+        intermediate_x_tensor = torch.full((batch_size, max_new_total_len), eos_token_id, dtype=torch.long, device=device)
+        for i in range(batch_size):
+            intermediate_x_tensor[i, :prompt_length] = x[i, :prompt_length]
+            intermediate_x_tensor[i, prompt_length:prompt_length+gen_lengths[i].item()] = mask_id
+        x = intermediate_x_tensor
+        gen_lengths = new_gen_lengths_with_eos
+        
+        
         if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
             print(f"[Stage-2] Iterative Denoising and Mask Insertion")
 
@@ -144,10 +151,12 @@ def generate(
                             print(f"Sequence {i} has reached the max length {max_gen_length}. Entering denoise-only mode.")
                         denoise_only_mode[i] = True
 
-            attention_mask = (x != pad_token_id).long()
+            max_len = x.shape[1]
+            arange_tensor = torch.arange(max_len, device=device).expand(batch_size, -1)
+            attention_mask = (arange_tensor < total_lengths.unsqueeze(1)).long()
             if cfg_scale > 0.0:
                 un_x = x.clone(); un_x[prompt_index] = mask_id
-                un_attention_mask = (un_x != pad_token_id).long()
+                un_attention_mask = attention_mask.clone()
                 x_ = torch.cat([x, un_x], dim=0)
                 attention_mask_ = torch.cat([attention_mask, un_attention_mask], dim=0)
                 logits, un_logits = torch.chunk(model(x_, attention_mask=attention_mask_).logits, 2, dim=0)
@@ -163,14 +172,14 @@ def generate(
             block_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
             for i in range(batch_size):
                 if current_pos[i] >= total_lengths[i]: continue
-                block_mask[i, current_pos[i]:min(current_pos[i] + block_length, total_lengths[i])] = True
+                block_mask[i, current_pos[i]:min(current_pos[i] + block_length, total_lengths[i].item())] = True
             
             currently_masked = (x == mask_id)
             high_conf_indices = (predicted_confidences > high_conf_threshold) & block_mask & currently_masked & (predicted_tokens != mask_id)
 
             for i in range(batch_size):
                 if current_pos[i] >= total_lengths[i]: continue
-                start_idx, end_idx = current_pos[i], min(current_pos[i] + block_length, total_lengths[i])
+                start_idx, end_idx = current_pos[i], min(current_pos[i] + block_length, total_lengths[i].item())
                 if not high_conf_indices[i, start_idx:end_idx].any():
                     valid_fallback_mask = block_mask[i] & currently_masked[i]
                     if not valid_fallback_mask.any(): continue
@@ -215,12 +224,15 @@ def generate(
             else:
                 x[fill_mask] = predicted_tokens[fill_mask]
                 max_new_total_len = 0
+                temp_new_gen_lengths = gen_lengths.clone()
                 for i in range(batch_size):
                     expansion_count = expand_indices[i].sum().item()
-                    new_gen_len = gen_lengths[i].item() + expansion_count * (expansion_factor - 1)
-                    new_gen_len = min(new_gen_len, max_gen_length)
-                    max_new_total_len = max(max_new_total_len, prompt_length + new_gen_len)
-                new_x_tensor = torch.full((batch_size, max_new_total_len), pad_token_id, device=device, dtype=torch.long)
+                    if expansion_count > 0:
+                        new_len = gen_lengths[i].item() + expansion_count * (expansion_factor - 1)
+                        temp_new_gen_lengths[i] = min(new_len, max_gen_length)
+                max_new_total_len = prompt_length + temp_new_gen_lengths.max()
+                
+                new_x_tensor = torch.full((batch_size, max_new_total_len), eos_token_id, device=device, dtype=torch.long)
                 new_gen_lengths = torch.zeros_like(gen_lengths)
 
                 for i in range(batch_size):
@@ -247,7 +259,7 @@ def generate(
                 total_len = prompt_length + gen_lengths[i]
                 while current_pos[i] < total_len:
                     start_check = current_pos[i]
-                    end_check = min(start_check + block_length, total_len)
+                    end_check = min(start_check + block_length, total_len.item())
                     if start_check == end_check: break
                     if not (x[i, start_check:end_check] == mask_id).any():
                         current_pos[i] = start_check + block_length
@@ -666,7 +678,7 @@ class LLaDA_DAEDAL(TemplateLM):
                 offload_folder=offload_folder,
             )
         )
-        self._model = transformers.AutoModel.from_pretrained(
+        self._model = LLaDAModelLM.from_pretrained(
             pretrained,
             revision=revision,
             torch_dtype=get_dtype(dtype),

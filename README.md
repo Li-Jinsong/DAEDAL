@@ -137,7 +137,7 @@ sh scripts/eval_LLaDA_Baseline.sh
 If you find our work helpful, please consider giving a star ⭐ and citation 📝 
 ```bibtex
 @article{li2025beyond,
-  title={Beyond Fixed: Variable-Length Denoising for Diffusion Large Language Models},
+  title={Beyond Fixed: Training-Free Variable-Length Denoising for Diffusion Large Language Models},
   author={Li, Jinsong and Dong, Xiaoyi and Zang, Yuhang and Cao, Yuhang and Wang, Jiaqi and Lin, Dahua},
   journal={arXiv preprint arXiv:2508.00819},
   year={2025}
