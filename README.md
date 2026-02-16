@@ -1,5 +1,7 @@
 <div align="center">
 
+<h1>🏆 ICLR 2026</h1>
+
 <p align="center">
   <img src="assets/daedal_logo.png" height=100>
 </p>
@@ -20,8 +22,7 @@ for Diffusion Large Language Models</h1>
 <div>
     <sup></sup><sup>1</sup> The Chinese University of Hong Kong<br><sup>2</sup> Shanghai AI Laboratory
 </div>
-
-<h2>🏆 ICLR 2026</h2>
+<br>
 
 [![arXiv](https://img.shields.io/badge/arXiv-2508.00819-b31b1b.svg)](https://arxiv.org/abs/2508.00819) 
 
