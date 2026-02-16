@@ -20,7 +20,8 @@ for Diffusion Large Language Models</h1>
 <div>
     <sup></sup><sup>1</sup> The Chinese University of Hong Kong<br><sup>2</sup> Shanghai AI Laboratory
 </div>
-<br>
+
+<h2>🏆 ICLR 2026</h2>
 
 [![arXiv](https://img.shields.io/badge/arXiv-2508.00819-b31b1b.svg)](https://arxiv.org/abs/2508.00819) 
 
@@ -51,8 +52,9 @@ for Diffusion Large Language Models</h1>
 
 
 ## 📢 News
-- [2025/08/04] Code are released!
-- [2025/08/04] Paper is available on arXiv!
+- [2026/01/27] 🎉 Daedal is accepted by ICLR 2026!
+- [2025/08/04] 🚀 Code are released!
+- [2025/08/04] 🚀 Paper is available on arXiv!
 
 
 ## 💻 Overview
